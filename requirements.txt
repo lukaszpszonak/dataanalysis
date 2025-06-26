@@ -1,8 +1,9 @@
-pandas
-matplotlib
-seaborn
-scikit-learn
-openpyxl
-streamlit
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.23.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
 openai>=1.0.0
-chardet
+scipy>=1.10.0
+chardet>=5.0.0
+psutil>=5.9.0
