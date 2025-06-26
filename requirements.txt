@@ -1,0 +1,8 @@
+pandas
+matplotlib
+seaborn
+scikit-learn
+openpyxl
+streamlit
+openai>=1.0.0
+
