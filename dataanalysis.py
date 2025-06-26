@@ -1,5 +1,4 @@
-
-# === INTELLIGENT DATA ANALYSIS DASHBOARD (MULTITHREADING + MEMORY AWARE + CUSTOM CHARTS + GPT Qs) ===
+# === INTELLIGENT DATA ANALYSIS DASHBOARD (MULTITHREADING + MEMORY AWARE + COLUMN COERCION FIX) ===
 from urllib.parse import quote
 import os
 import re
@@ -84,12 +83,14 @@ def detect_anomalies(df, method="z-score", threshold=3):
     numeric_df = df.select_dtypes(include="number")
     anomalies = pd.DataFrame()
     reasons = []
+
     if method == "z-score":
         z = numeric_df.apply(zscore)
         mask = (z.abs() > threshold).any(axis=1)
         anomalies = df[mask].copy()
         for i in anomalies.index:
             reasons.append(", ".join(f"{col} z={z.loc[i, col]:.2f}" for col in numeric_df if abs(z.loc[i, col]) > threshold))
+
     if not anomalies.empty:
         anomalies["Anomaly Reason"] = reasons
     return anomalies
@@ -115,29 +116,23 @@ def threaded_plot(df, col, kind):
         return f"Skipped {col} ({kind}) – Not enough memory"
 
     plt.figure()
-    try:
-        if kind == "Histogram":
-            sns.histplot(df[col], kde=True)
-        elif kind == "Boxplot":
-            sns.boxplot(y=df[col])
-        elif kind == "Bar":
-            df[col].value_counts().plot(kind='bar')
-        elif kind == "Pie":
-            df[col].value_counts().plot(kind='pie', autopct='%1.1f%%')
-        elif kind == "Line":
-            df[col].plot(kind='line')
-        else:
-            return f"Unsupported chart type: {kind}"
+    if kind == "Histogram":
+        sns.histplot(df[col], kde=True)
+    elif kind == "Boxplot":
+        sns.boxplot(y=df[col])
+    elif kind == "Bar Chart":
+        df[col].value_counts().plot(kind='bar')
+    elif kind == "Pie Chart":
+        df[col].value_counts().plot(kind='pie', autopct='%1.1f%%')
+    else:
+        return f"Unsupported chart type: {kind}"
 
-        safe_name = re.sub(r'[\/*?:"<>|]', "_", col)
-        path = os.path.join(OUTPUT_DIR, f"{safe_name}_{kind}.png")
-        plt.title(f"{kind} of {col}")
-        plt.tight_layout()
-        plt.savefig(path)
-        plt.close()
-        return path
-    except Exception as e:
-        return f"Failed {col} ({kind}): {e}"
+    safe_name = re.sub(r'[\\/*?:"<>|]', "_", col)
+    path = os.path.join(OUTPUT_DIR, f"{safe_name}_{kind}.png")
+    plt.title(f"{kind} of {col}")
+    plt.savefig(path)
+    plt.close()
+    return path
 
 # === Streamlit UI ===
 st.set_page_config(layout="wide")
@@ -184,6 +179,15 @@ if uploaded:
                 df_clean[col] = df_clean[col].fillna(0)
         for col in df_clean.select_dtypes(include="object"):
             df_clean[col] = df_clean[col].fillna("unknown")
+
+        # Coerce string-like numbers to actual numerics
+        for col in df_clean.columns:
+            if df_clean[col].dtype == "object":
+                try:
+                    df_clean[col] = pd.to_numeric(df_clean[col])
+                except:
+                    pass
+
         if drop_const:
             df_clean = df_clean.loc[:, df_clean.apply(pd.Series.nunique) > 1]
         if drop_dups:
@@ -192,10 +196,20 @@ if uploaded:
     info = analyze_columns(df_clean)
     trends = detect_trends(df_clean)
     filename = uploaded.name
-    prompt = f"Session {session_uuid}: File '{filename}' with {df_clean.shape[0]} rows and {df_clean.shape[1]} cols. Numeric: {info['num_cols']}, Categorical: {info['cat_cols']}. " +              "Do you understand file structure? What trends should I look for? Anything outstanding in the data? Any recommendations?"
-    gpt_summary_text = gpt_summary(prompt) if enable_gpt else "(GPT disabled)"
+    structure_prompt = (
+    f"Session {session_uuid}: File '{filename}' with {df_clean.shape[0]} rows and {df_clean.shape[1]} columns.\n"
+    f"- Numeric Columns: {', '.join(info['num_cols']) or 'None'}\n"
+    f"- Categorical Columns: {', '.join(info['cat_cols']) or 'None'}\n"
+    f"- Text Columns: {', '.join(info['text_cols']) or 'None'}\n"
+    f"- Date Columns: {', '.join(info['date_cols']) or 'None'}\n"
+    "Do you understand file structure? What trends should I look for? Anything outstanding in the data? Any recommendations?"
+)
+
+
+    gpt_summary_text = gpt_summary(structure_prompt) if enable_gpt else "(GPT disabled)"
     anomalies = detect_anomalies(df_clean, method, threshold)
-    gpt_link = f"https://chatgpt.com/g/g-681a33e2f2ec8191ac28ed90f1ae1b16-insight-gpt?prompt={quote(prompt)}"
+    encoded_prompt = quote(structure_prompt)
+    gpt_link = f"https://chatgpt.com/g/g-681a33e2f2ec8191ac28ed90f1ae1b16-insight-gpt?prompt={encoded_prompt}"
 
     tabs = st.tabs(["📋 Overview", "📈 Trends", "🧠 GPT", "🚨 Anomalies", "📊 Visualize", "📥 Downloads"])
 
@@ -215,9 +229,9 @@ if uploaded:
     with tabs[4]:
         st.markdown("### Select Columns and Chart Types")
         selected_cols = st.multiselect("Columns", info['num_cols'] + info['cat_cols'])
-        chart_types = st.multiselect("Chart Types", ["Histogram", "Boxplot", "Bar", "Pie", "Line"])
+        chart_types = st.multiselect("Chart Types", ["Histogram", "Boxplot", "Bar Chart", "Pie Chart"])
         if st.button("Generate Charts"):
-            st.info("Rendering selected visualizations...")
+            st.info("Running visualizations in threads...")
             for col in selected_cols:
                 for chart in chart_types:
                     result = threaded_plot(df_clean, col, chart)
@@ -230,5 +244,6 @@ if uploaded:
         st.download_button("📁 Download Cleaned Data", df_clean.to_csv(index=False), "cleaned.csv")
         st.download_button("🚨 Download Anomalies", anomalies.to_csv(index=False), "anomalies.csv")
         st.download_button("🧠 GPT Summary", gpt_summary_text.encode(), "summary.txt")
+
 else:
     st.info("Upload a file to get started.")
